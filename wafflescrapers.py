@@ -7,7 +7,50 @@ import json
 from datetime import datetime
 import time
 
+# *** Proxy pool class *** #
+
+class ProxyPool:
+
+    def __init__(self,proxy_list_path):
+        """
+        param: proxy_list_path: path to list of proxies downloaded form webshare.io
+        """
+        proxy_list = list(np.loadtxt(proxy_list_path,dtype=str))
+        proxy_list = ['http://' + ':'.join(x.split(':')[2:]) + '@' + ':'.join(x.split(':')[:2]) for x in proxy_list]
+        proxy_list = [{'http':x,'https':x} for x in proxy_list]
+
+        self.proxy_list = proxy_list
+        self.num_proxies = len(self.proxy_list)
+        self.random_index = stats.randint(0,self.num_proxies).rvs
+
+    def verify_ip_addresses(self,sleep_seconds=0.0,nmax=10):
+
+        """
+        Function to verify that IP address appears as those of proxies
+        """
+        url = 'https://api.ipify.org/'
+        n = np.min([nmax,len(self.proxy_list)])
+
+        for i in range(n):
+
+            res = requests.get(url,proxies=self.proxy_list[i])
+            print(res.text,flush=True)
+            time.sleep(sleep_seconds)
+
+        return(None)
+
+    def random_proxy(self):
+        """
+        Function to return a randomly-selected proxy from self.proxy_list
+        """
+
+        proxy = self.proxy_list[self.random_index()]
+
+        return(proxy)
+
+
 # *** Initial setup *** #
+
 def create_folders(companies=['bojangles','dunkin_donuts','wendys']):
     """
     Function to create directory structure for data scraped from company websites
@@ -32,11 +75,12 @@ def create_folders(companies=['bojangles','dunkin_donuts','wendys']):
 
 # *** Bojangles *** #
 
-def get_bojangles_data(sleep_seconds=0.2,random_pause=0.1,increment=50,extra_limit=5,failure_limit=10):
+def get_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment=50,extra_limit=5,failure_limit=10):
 
     """
     Scraper to pull data on bojangles restaurants and locations
 
+    param: proxypool: pool of proxies to route requests through
     param: sleep_seconds: number of seconds to wait in between api queries
     param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
     param: increment: number of results to get in each api query
@@ -77,7 +121,7 @@ def get_bojangles_data(sleep_seconds=0.2,random_pause=0.1,increment=50,extra_lim
                   'source': 'STANDARD',
                   'jsLibVersion': 'v1.12.4'}
 
-        res = requests.get(url,params=params)
+        res = requests.get(url,params=params,proxies=proxypool.random_proxy())
 
         if res.ok:
 
@@ -220,11 +264,12 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
 
 # *** Dunkin Donuts ***
 
-def get_dunkin_data(lat=38.6270,lon=-90.1994,radius=1000000,maxresults=1000000):
+def get_dunkin_data(proxypool,lat=38.6270,lon=-90.1994,radius=1000000,maxresults=1000000):
 
     """
     Scraper to pull data on dunkin donuts locations
 
+    param: proxypool: pool of proxies to route requests through
     param: lat: latitude of origin point
     param: lon: longitude of origin point
     param: radius: search radius for dunkin locations (appears to be in miles). Make big to get all locations.
@@ -245,7 +290,7 @@ def get_dunkin_data(lat=38.6270,lon=-90.1994,radius=1000000,maxresults=1000000):
 
     url = 'https://www.dunkindonuts.com/bin/servlet/dsl'
 
-    res = requests.post(url,data=payload)
+    res = requests.post(url,data=payload,proxies=proxypool.random_proxy())
 
     if res.ok:
 
@@ -363,12 +408,13 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
 
 # *** Wendys ***
 
-def get_wendys_data(grid,sleep_seconds=2.0,random_pause=2.0,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=10):
+def get_wendys_data(grid,proxypool,sleep_seconds=2.0,random_pause=2.0,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=10):
 
     """
     Scraper to pull data on wendys restaurants and locations
 
     param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: proxypool: pool of proxies to route requests through
     param: sleep_seconds: number of seconds to wait in between api queries
     param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
     param: maxresults: maximum results to return within each search bubble (make big)
@@ -401,13 +447,15 @@ def get_wendys_data(grid,sleep_seconds=2.0,random_pause=2.0,maxresults=10000,rad
                   'filterSearch': 'false',
                   'radius': point['radius']*radius_multiplier}
 
+        headers={'Accept':'application/json'}
+
         url = 'https://digitalservices.prod.ext-aws.wendys.com/LocationServices/rest/nearbyLocations'
 
         num_failures = 0
 
         while num_failures < failure_limit:
 
-            res = requests.get(url,params=params,headers={'Accept':'application/json'})
+            res = requests.get(url,params=params,headers=headers,proxies=proxypool.random_proxy())
             time.sleep(sleep_seconds + dist.rvs())
 
             if res.ok:
