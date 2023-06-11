@@ -9,9 +9,8 @@ cd google_drive
 python upload_file.py $FILEPATH
 STATUS=$?
 cd ..
+rm -r data
 if [ $STATUS == 0 ]; then
-  rm $ARCHIVE
-  rm -r data
   echo "Data successfully backed up to google drive"
 else
   echo "Backup failed"
