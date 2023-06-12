@@ -12,8 +12,11 @@ STATUS=$?
 cd ..
 rm -r data
 if [ $STATUS == 0 ]; then
-  echo "Data successfully backed up to google drive"
+  MESSAGE="File "$ARCHIVE" was successfully backed up to google drive."
+  SUBJECT="Waffle House Index: Backup Successful"
   rm $LASTARCHIVE
 else
-  echo "Backup failed"
+  MESSAGE="Automatic backup of "$ARCHIVE" was unsuccessful. Please upload to google drive manually."
+  SUBJECT="Waffle House Index: Backup Failed"
 fi
+echo $MESSAGE | mutt -s "$SUBJECT" kfitzmaurice98@gmail.com,kfitzmaurice@unc.edu,kpf10@pitt.edu
