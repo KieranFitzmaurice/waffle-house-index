@@ -579,3 +579,153 @@ def clean_wendys_data(raw_filepath,scraper_issues):
     df.to_csv(outname,index=False)
 
     return(df)
+
+# *** McDonalds ***
+
+def update_mcdonalds_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxresults=174,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
+
+    """
+    Scraper to check whether a given grid point contains a McDonalds restaurant.
+    By running this function once per month, we can speed up our daily web scraping by
+    only focusing on points with results.
+
+    param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: proxypool: pool of proxies to route requests through
+    param: sleep_seconds: number of seconds to wait in between api queries
+    param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
+    param: maxresults: maximum results to return within each search bubble (make big)
+    param: radius_multiplier: multiplier applied to search radius
+    param: failure_limit: number of times to re-attempt an api query if initial attempt fails
+    param: backoff_seconds: number of seconds to wait before re-attempting api query
+    """
+
+    dist = stats.uniform(0,random_pause)
+
+    n = len(grid)
+
+    for i,point in enumerate(grid.to_dict(orient='records')):
+
+        print(f'{i} / {n} ({np.round(i/n*100,1)}%)',flush=True)
+
+        params = {'latitude': point['lat'],
+                  'longitude': point['lon'],
+                  'radius': point['radius']*radius_multiplier,
+                  'maxResults': maxresults,
+                  'country': 'us',
+                  'language': 'en-us'}
+
+        headers={'Accept':'*/*',
+                 'Accept-Encoding':'gzip, deflate, br',
+                 'Accept-Language':'en-US,en;q=0.9',
+                 'Referer':'https://www.mcdonalds.com/us/en-us/restaurant-locator.html',
+                 'Sec-Ch-Ua':'"Not.A/Brand";v="8", "Chromium";v="114", "Google Chrome";v="114"',
+                 'Sec-Ch-Ua-Mobile':'?0',
+                 'Sec-Ch-Ua-Platform':"Windows",
+                 'Sec-Fetch-Dest':'empty',
+                 'Sec-Fetch-Mode':'cors',
+                 'Sec-Fetch-Site':'same-origin',
+                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
+
+        url = 'https://www.mcdonalds.com/googleappsv2/geolocation'
+
+        num_failures = 0
+
+        while num_failures < failure_limit:
+
+            res = requests.get(url,params=params,headers=headers,proxies=proxypool.random_proxy())
+            time.sleep(sleep_seconds + dist.rvs())
+
+            if res.ok:
+                grid.iloc[i,-2] = len(res.json()['features'])
+                grid.iloc[i,-1] = True
+                break
+            else:
+                num_failures +=1
+                time.sleep(backoff_seconds)
+
+        if not res.ok:
+            grid.iloc[i,-2] = -1
+            grid.iloc[i,-1] = True
+
+    return(grid)
+
+def get_mcdonalds_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxresults=174,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
+
+    """
+    Scraper to pull data on wendys restaurants and locations
+
+    param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: proxypool: pool of proxies to route requests through
+    param: sleep_seconds: number of seconds to wait in between api queries
+    param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
+    param: maxresults: maximum results to return within each search bubble (make big)
+    param: radius_multiplier: multiplier applied to search radius
+    param: failure_limit: number of times to re-attempt an api query if initial attempt fails
+    param: backoff_seconds: number of seconds to wait before re-attempting api query
+    """
+
+    dist = stats.uniform(0,random_pause)
+    scraper_issues = False
+    result_list = []
+
+    n = len(grid)
+
+
+    for i,point in enumerate(grid.to_dict(orient='records')):
+
+        print(f'{i} / {n} ({np.round(i/n*100,1)}%)',flush=True)
+
+        result_dict = {}
+        result_dict['point'] = point.copy()
+
+        params = {'latitude': point['lat'],
+                  'longitude': point['lon'],
+                  'radius': point['radius']*radius_multiplier,
+                  'maxResults': maxresults,
+                  'country': 'us',
+                  'language': 'en-us'}
+
+        headers={'Accept':'*/*',
+                 'Accept-Encoding':'gzip, deflate, br',
+                 'Accept-Language':'en-US,en;q=0.9',
+                 'Referer':'https://www.mcdonalds.com/us/en-us/restaurant-locator.html',
+                 'Sec-Ch-Ua':'"Not.A/Brand";v="8", "Chromium";v="114", "Google Chrome";v="114"',
+                 'Sec-Ch-Ua-Mobile':'?0',
+                 'Sec-Ch-Ua-Platform':"Windows",
+                 'Sec-Fetch-Dest':'empty',
+                 'Sec-Fetch-Mode':'cors',
+                 'Sec-Fetch-Site':'same-origin',
+                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
+
+        url = 'https://www.mcdonalds.com/googleappsv2/geolocation'
+
+        num_failures = 0
+
+        while num_failures < failure_limit:
+
+            res = requests.get(url,params=params,headers=headers,proxies=proxypool.random_proxy())
+            time.sleep(sleep_seconds + dist.rvs())
+
+            if res.ok:
+                result_dict['data'] = res.json()['features']
+                break
+            else:
+                num_failures +=1
+                time.sleep(backoff_seconds)
+
+        if not res.ok:
+            result_dict['data'] = res.status_code
+            scraper_issues = True
+
+        result_dict['time'] = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+
+        result_list.append(result_dict.copy())
+
+    date_str = datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
+    raw_filepath = os.path.join(os.getcwd(),f'data/raw/mcdonalds/{date_str}_mcdonalds.json')
+
+    with open(raw_filepath,'w') as f:
+        json.dump(result_list,f,indent=4)
+        f.close()
+
+    return(raw_filepath,scraper_issues)
