@@ -602,6 +602,8 @@ def update_mcdonalds_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxr
     dist = stats.uniform(0,random_pause)
 
     n = len(grid)
+    count_idx = list(grid.columns).index('num_results')
+    checked_idx = list(grid.columns).index('checked_this_month')
 
     for i,point in enumerate(grid.to_dict(orient='records')):
 
@@ -636,16 +638,21 @@ def update_mcdonalds_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxr
             time.sleep(sleep_seconds + dist.rvs())
 
             if res.ok:
-                grid.iloc[i,-2] = len(res.json()['features'])
-                grid.iloc[i,-1] = True
+                try:
+                    grid.iloc[i,count_idx] = len(res.json()['features'])
+                    grid.iloc[i,checked_idx] = True
+                except:
+                    grid.iloc[i,count_idx] = -1
+                    grid.iloc[i,checked_idx] = True
                 break
+
             else:
                 num_failures +=1
                 time.sleep(backoff_seconds)
 
         if not res.ok:
-            grid.iloc[i,-2] = -1
-            grid.iloc[i,-1] = True
+            grid.iloc[i,count_idx] = -1
+            grid.iloc[i,checked_idx] = True
 
     return(grid)
 
