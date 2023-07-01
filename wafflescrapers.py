@@ -6,6 +6,8 @@ import os
 import json
 from datetime import datetime
 import time
+import asyncio
+import aiohttp as aiohttp
 
 # *** Proxy pool class *** #
 
@@ -48,10 +50,157 @@ class ProxyPool:
 
         return(proxy)
 
+# *** Classes and functions to facilitate asynchronous web scraping *** #
+
+class TokenBucket:
+
+    """
+    Rate limiter class that uses token-bucket algorithm to control rate of asynchronous
+    requests to api. Based on method described by Quentin Pradet in following blog post:
+    https://quentin.pradet.me/blog/how-do-you-rate-limit-calls-with-aiohttp.html
+    """
+
+    def __init__(self,client,max_tokens,rate,backoff):
+        """
+        param: client: Instance of aiohttp ClientSession
+        param: max_tokens: maximum number of tokens in bucket
+        param: rate: average rate of token generation [tokens/second]
+        param: backoff: time to wait if no tokens available before re-checking [seconds]
+        """
+        self.client = client
+        self.tokens = max_tokens
+        self.max_tokens = max_tokens
+        self.rate = rate
+        self.last_update = time.monotonic()
+        self.backoff = backoff
+
+        return None
+
+    async def get(self,*args,**kwargs):
+        """
+        Submit a GET request when token comes available
+        """
+        await self.wait_for_token()
+        return self.client.get(*args,**kwargs)
+
+    async def post(self,*args,**kwargs):
+        """
+        Submit a POST request when token comes available
+        """
+        await self.wait_for_token()
+        return self.client.post(*args,**kwargs)
+
+    async def wait_for_token(self):
+        """
+        Check to see if tokens are available; if none are left,
+        wait for a bit and check to see if any new ones were generated.
+        """
+        while self.tokens < 1:
+            self.mint_tokens()
+            await asyncio.sleep(self.backoff)
+        self.tokens -= 1
+
+        return None
+
+    def mint_tokens(self):
+        """
+        Create new tokens. Number of tokens generated in time since
+        last update is drawn randomly from a poisson distribution.
+        """
+        now = time.monotonic()
+        time_elapsed = now - self.last_update
+        mu = time_elapsed*self.rate
+        new_tokens = stats.poisson(mu).rvs()
+        self.tokens = np.min([self.tokens + new_tokens,self.max_tokens])
+        self.last_update = now
+
+        return None
+
+async def json_get_request(client,req):
+    """
+    Helper function for implementing asynchronous GET requests returning a json
+    """
+    async with await client.get(url=req['url'],params=req['params'],headers=req['headers'],proxy=req['proxies']['http']) as res:
+        return await res.json()
+
+async def json_post_request(client,req):
+    """
+    Helper function for implementing asynchronous POST requests returning a json
+    """
+    async with await client.post(url=req['url'],params=req['params'],headers=req['headers'],proxy=req['proxies']['http']) as res:
+        return await res.json()
+
+class AsynchronousScraper:
+
+    def __init__(self,request_list,method='GET',num_retry=1,max_tokens=10,rate=10,backoff=0.2):
+        """
+        Class to implement asyncronous web scraping.
+
+        param: request_list: list of dictonaries containing relevant arguments for request
+        param: method: GET or POST
+        param: num_retry: number of times to reattempt a failed web scrape
+        param: max_tokens: maximum number of tokens in bucket
+        param: rate: average rate of token generation [tokens/second]
+        param: backoff: time to wait if no tokens available before re-checking [seconds]
+        """
+        self.pending_requests = np.array(request_list)
+        self.pending_indices = np.arange(len(request_list))
+        self.results = np.array([])
+        self.completed_requests = np.array([])
+        self.completed_indices = np.array([])
+        self.num_retry = num_retry
+        self.max_tokens=max_tokens
+        self.rate=rate
+        self.backoff=backoff
+
+        if method == 'GET':
+            self.submit_request = json_get_request
+        else:
+            self.submit_request = json_post_request
+
+        return None
+
+    async def scraping_pass(self):
+        """
+        Perform one pass over list of pending pages to scrape.
+        """
+
+        async with aiohttp.ClientSession() as client:
+            client = TokenBucket(client,self.max_tokens,self.rate,self.backoff)
+            tasks = [asyncio.ensure_future(self.submit_request(client, req)) for req in self.pending_requests]
+            return await asyncio.gather(*tasks,return_exceptions=True)
+
+    async def scrape(self):
+        """
+        Main function to perform web scraping
+        """
+
+        num_passes = 0
+
+        while (len(self.pending_requests) > 0) and (num_passes <= self.num_retry):
+
+            new_results = await self.scraping_pass()
+            new_results = np.array(new_results)
+            is_exception = np.array([isinstance(x,Exception) for x in new_results])
+            self.results = np.append(self.results,new_results[~is_exception])
+            self.completed_requests = np.append(self.completed_requests,self.pending_requests[~is_exception])
+            self.completed_indices = np.append(self.completed_indices,self.pending_indices[~is_exception])
+            self.pending_requests = self.pending_requests[is_exception]
+            self.pending_indices = self.pending_indices[is_exception]
+
+            num_passes += 1
+
+        num_fail = len(self.pending_indices)
+        self.results = np.append(self.results,np.array([None]*num_fail))
+        self.completed_indices = np.append(self.completed_indices,self.pending_indices)
+
+        req_order = self.completed_indices.argsort()
+
+        return(self.results[req_order].tolist())
 
 # *** Initial setup *** #
 
-def create_folders(companies=['bojangles','dunkin_donuts','wendys']):
+def create_folders(companies=['bojangles','dunkin_donuts','wendys','mcdonalds']):
     """
     Function to create directory structure for data scraped from company websites
 
@@ -75,7 +224,7 @@ def create_folders(companies=['bojangles','dunkin_donuts','wendys']):
 
 # *** Bojangles *** #
 
-def get_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment=50,extra_limit=5,failure_limit=10):
+def scrape_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment=50,extra_limit=5,failure_limit=10):
 
     """
     Scraper to pull data on bojangles restaurants and locations
@@ -264,7 +413,7 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
 
 # *** Dunkin Donuts ***
 
-def get_dunkin_data(proxypool,lat=38.6270,lon=-90.1994,radius=1000000,maxresults=1000000):
+def scrape_dunkin_data(proxypool,lat=38.6270,lon=-90.1994,radius=1000000,maxresults=1000000):
 
     """
     Scraper to pull data on dunkin donuts locations
@@ -408,7 +557,7 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
 
 # *** Wendys ***
 
-def get_wendys_data(grid,proxypool,sleep_seconds=2.0,random_pause=2.0,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=10):
+def scrape_wendys_data(grid,proxypool,sleep_seconds=2.0,random_pause=2.0,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=10):
 
     """
     Scraper to pull data on wendys restaurants and locations
@@ -656,10 +805,10 @@ def update_mcdonalds_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxr
 
     return(grid)
 
-def get_mcdonalds_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxresults=174,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
+def scrape_mcdonalds_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxresults=174,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
 
     """
-    Scraper to pull data on wendys restaurants and locations
+    Scraper to pull data on mcdonalds restaurants and locations
 
     param: grid: dataframe of lat/lon coordinates and radii to use in search
     param: proxypool: pool of proxies to route requests through
@@ -714,7 +863,11 @@ def get_mcdonalds_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxresu
             time.sleep(sleep_seconds + dist.rvs())
 
             if res.ok:
-                result_dict['data'] = res.json()['features']
+                try:
+                    result_dict['data'] = res.json()['features']
+                except:
+                    results_dict['data'] = -1
+                    scraper_issues = True
                 break
             else:
                 num_failures +=1
@@ -736,3 +889,201 @@ def get_mcdonalds_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxresu
         f.close()
 
     return(raw_filepath,scraper_issues)
+
+def configure_mcdonalds_requests(grid,proxypool,maxresults=174,radius_multiplier=1.0):
+
+    """
+    Function to configure mcdonalds request parameters
+
+    param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: proxypool: pool of proxies to route requests through
+    param: maxresults: maximum results to return within each search bubble (make big)
+    param: radius_multiplier: multiplier applied to search radius
+    """
+
+    n = len(grid)
+
+    request_list = []
+
+    for point in grid.to_dict(orient='records'):
+
+        request_dict = {}
+
+        params = {'latitude': point['lat'],
+                  'longitude': point['lon'],
+                  'radius': point['radius']*radius_multiplier,
+                  'maxResults': maxresults,
+                  'country': 'us',
+                  'language': 'en-us'}
+
+        headers={'Accept':'*/*',
+                 'Accept-Encoding':'gzip, deflate, br',
+                 'Accept-Language':'en-US,en;q=0.9',
+                 'Referer':'https://www.mcdonalds.com/us/en-us/restaurant-locator.html',
+                 'Sec-Ch-Ua':'"Not.A/Brand";v="8", "Chromium";v="114", "Google Chrome";v="114"',
+                 'Sec-Ch-Ua-Mobile':'?0',
+                 'Sec-Ch-Ua-Platform':"Windows",
+                 'Sec-Fetch-Dest':'empty',
+                 'Sec-Fetch-Mode':'cors',
+                 'Sec-Fetch-Site':'same-origin',
+                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
+
+        # When using the asynchronous scraper we need to have 'http' insteald of 'https'
+        request_dict['url'] = 'http://www.mcdonalds.com/googleappsv2/geolocation'
+        request_dict['params'] = params
+        request_dict['headers'] = headers
+        request_dict['proxies'] = proxypool.random_proxy()
+
+        request_list.append(request_dict.copy())
+
+    return(request_list)
+
+def async_scrape_mcdonalds_data(grid,proxypool,maxresults=174,radius_multiplier=1.0,max_tokens=15,rate=10):
+    """
+    Function to asynchronously scrape data from mcdonalds web api.
+
+    param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: proxypool: pool of proxies to route requests through
+    param: maxresults: maximum results to return within each search bubble (make big)
+    param: radius_multiplier: multiplier applied to search radius
+    param: max_tokens: maximum number of tokens in bucket
+    param: rate: average rate of token generation [tokens/second]
+    """
+
+    request_list = configure_mcdonalds_requests(grid,proxypool,maxresults,radius_multiplier)
+    scraper = AsynchronousScraper(request_list,max_tokens,rate)
+    result_list = asyncio.run(scraper.scrape())
+
+    scraper_issues = False
+
+    for i,point in enumerate(grid.to_dict(orient='records')):
+
+        result_dict = {}
+        result_dict['point'] = point.copy()
+
+        if isinstance(result_list[i],dict):
+            try:
+                result_dict['data'] = result_list[i]['features']
+            except:
+                result_dict['data'] = -1
+                scraper_issues = True
+        else:
+            result_dict['data'] = -1
+            scraper_issues = True
+
+        result_dict['time'] = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+        result_list[i] = result_dict.copy()
+
+    date_str = datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
+    raw_filepath = os.path.join(os.getcwd(),f'data/raw/mcdonalds/{date_str}_mcdonalds.json')
+
+    with open(raw_filepath,'w') as f:
+       json.dump(result_list,f,indent=4)
+       f.close()
+
+    return(raw_filepath,scraper_issues)
+
+def clean_mcdonalds_data(raw_filepath,scraper_issues):
+
+    """
+    Function to clean data scraped from mcdonalds web api.
+
+    param: raw_filepath: filepath of raw data in .json format
+    param: scraper_issues: False if data was scraped without errors; True otherwise
+    """
+
+    with open(raw_filepath,'r') as f:
+        results_dict = json.load(f)
+        f.close()
+
+    fileparts = raw_filepath.split('/')[-1].split('_')
+
+    observation_time_list = []
+    address_list = []
+    state_list = []
+    status_list = []
+    internal_id_list = []
+    website_list = []
+    phone_list = []
+    extra_list = []
+
+    extra_keys = ['distance','lat','lng']
+
+    for result in results_dict:
+
+        observation_time = result['time']
+
+        if type(result['data'])==list:
+
+            for entry in result['data']:
+
+                extra = str(entry['geometry']).strip('{}')
+                entry = entry['properties']
+
+                address = entry['addressLine1']
+
+                if 'addressLine2' in entry.keys():
+                    address += ', ' + entry['addressLine2']
+
+                address += ', '  + entry['customAddress']
+
+                state = entry['subDivision']
+
+                # IMPORTANT: McDonald's API appears to only return open stores
+                # This means we will need to infer which stores are closed
+                # based on those that are missing
+
+                if entry['openstatus']=='OPEN':
+                    status = 'open'
+                else:
+                    #status = 'inconclusive'
+                    status = entry['openstatus']
+
+                internal_id = entry['identifierValue']
+
+                if 'restaurantUrl' in entry.keys():
+                    website = entry['restaurantUrl']
+                else:
+                    website = ''
+
+                if 'telephone' in entry.keys():
+                    phone = entry['telephone']
+                else:
+                    phone = ''
+
+                observation_time_list.append(observation_time)
+                address_list.append(address)
+                state_list.append(state)
+                status_list.append(status)
+                internal_id_list.append(internal_id)
+                website_list.append(website)
+                phone_list.append(phone)
+                extra_list.append(extra)
+
+        else:
+            print(result['data'])
+
+    n_obs = len(address_list)
+    scraper_issues_list = [scraper_issues]*n_obs
+    company_list = ['mcdonalds']*n_obs
+
+    d = {'observation_time':observation_time_list,
+         'scraper_issues': scraper_issues_list,
+         'company':company_list,
+         'address':address_list,
+         'state':state_list,
+         'status':status_list,
+         'internal_id':internal_id_list,
+         'website':website_list,
+         'phone':phone_list,
+         'extra':extra_list}
+
+    df = pd.DataFrame(data=d)
+
+    df = df[~df[['address','internal_id']].duplicated(keep='first')].reset_index(drop=True)
+
+    fname = fileparts[0] + '_mcdonalds.csv'
+    outname = os.path.join(os.getcwd(),f'data/clean/mcdonalds/{fname}')
+    df.to_csv(outname,index=False)
+
+    return(df)
