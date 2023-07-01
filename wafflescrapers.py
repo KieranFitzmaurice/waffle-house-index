@@ -413,56 +413,79 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
 
 # *** Dunkin Donuts ***
 
-def scrape_dunkin_data(proxypool,lat=38.6270,lon=-90.1994,radius=1000000,maxresults=1000000):
+def scrape_dunkin_data(grid,proxypool,sleep_seconds=0.2,random_pause=0.1,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
 
     """
     Scraper to pull data on dunkin donuts locations
 
     param: proxypool: pool of proxies to route requests through
-    param: lat: latitude of origin point
-    param: lon: longitude of origin point
-    param: radius: search radius for dunkin locations (appears to be in miles). Make big to get all locations.
-    param: maxresults: maximum number of results to return. Make big to get all locations
+    param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: sleep_seconds: number of seconds to wait in between api queries
+    param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
+    param: maxresults: maximum results to return within each search bubble (make big)
+    param: radius_multiplier: multiplier applied to search radius
+    param: failure_limit: number of times to re-attempt an api query if initial attempt fails
+    param: backoff_seconds: number of seconds to wait before re-attempting api query
     """
 
+    dist = stats.uniform(0,random_pause)
     scraper_issues = False
+    result_list = []
 
-    origin_str = f'{lat},{lon}'
+    n = len(grid)
 
-    payload = {'service': 'DSL',
-               'origin': origin_str,
-               'radius': radius,
-               'maxMatches': maxresults,
-               'pageSize': 1,
-               'units': 'm',
-               'ambiguities': 'ignore'}
+    for i,point in enumerate(grid.to_dict(orient='records')):
 
-    url = 'https://www.dunkindonuts.com/bin/servlet/dsl'
+        print(f'{i} / {n} ({np.round(i/n*100,1)}%)',flush=True)
 
-    res = requests.post(url,data=payload,proxies=proxypool.random_proxy())
+        result_dict = {}
+        result_dict['point'] = point.copy()
 
-    if res.ok:
+        lat = point['lat']
+        lon = point['lon']
+        origin_str = f'{lat},{lon}'
 
-        try:
+        payload = {'service': 'DSL',
+                   'origin': origin_str,
+                   'radius': int(point['radius']*radius_multiplier),
+                   'maxMatches': maxresults,
+                   'pageSize': 1,
+                   'units': 'm',
+                   'ambiguities': 'ignore'}
 
-            results_dict = res.json()['data']['storeAttributes']
+        url = 'https://www.dunkindonuts.com/bin/servlet/dsl'
 
-        except:
+        num_failures = 0
 
-            results_dict = {}
+        while num_failures < failure_limit:
+
+            res = requests.post(url,data=payload,proxies=proxypool.random_proxy())
+            time.sleep(sleep_seconds + dist.rvs())
+
+            if res.ok:
+                try:
+                    result_dict['data'] = res.json()['data']['storeAttributes']
+                except:
+                    result_dict['data'] = -1
+                    scraper_issues = True
+                break
+            else:
+                num_failures +=1
+                time.sleep(backoff_seconds)
+
+        if not res.ok:
+            result_dict['data'] = res.status_code
             scraper_issues = True
 
-    else:
+        result_dict['time'] = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
 
-        results_dict = {}
-        scraper_issues = True
+        result_list.append(result_dict.copy())
 
     date_str = datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
-
     raw_filepath = os.path.join(os.getcwd(),f'data/raw/dunkin_donuts/{date_str}_dunkin_donuts.json')
 
     with open(raw_filepath,'w') as f:
-        json.dump(results_dict,f,indent=4)
+        json.dump(result_list,f,indent=4)
         f.close()
 
     return(raw_filepath,scraper_issues)
@@ -481,57 +504,63 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
         f.close()
 
     fileparts = raw_filepath.split('/')[-1].split('_')
-    observation_time = pd.Timestamp(fileparts[0] + ' ' + fileparts[1].replace('-',':'))
 
-    internal_id_list = []
+    observation_time_list = []
     address_list = []
     state_list = []
     status_list = []
+    internal_id_list = []
     website_list = []
     phone_list = []
     extra_list = []
 
     extra_keys = ['operation_status_cd','close_reason_cd']
 
-    for entry in results_dict:
+    for result in results_dict:
 
-        address = entry['address']
+        observation_time = result['time']
 
-        if entry['address2'].strip(' ') != '':
-            address += ' ' + entry['address2'].strip(' ')
+        if type(result['data'])==list:
 
-        address += ', ' + entry['city'] + ', ' + entry['state'] + ' ' + entry['postal']
+            for entry in result['data']:
 
-        state = entry['state']
+                address = entry['address']
 
-        if entry['operation_status_cd']=='2':
-            status = 'open'
-        elif (entry['operation_status_cd']=='7') or (entry['operation_status_cd']=='3'):
-            status = 'closed'
-        else:
-            status = 'inconclusive'
+                if entry['address2'].strip(' ') != '':
+                    address += ' ' + entry['address2'].strip(' ')
 
-        internal_id = entry['recordId']
-        website = entry['website']
-        phone = entry['phonenumber']
+                address += ', ' + entry['city'] + ', ' + entry['state'] + ' ' + entry['postal']
 
-        extra = ''
+                state = entry['state']
 
-        for extra_key in extra_keys:
-            extra += extra_key + ' : ' + entry[extra_key] + ', '
+                if entry['operation_status_cd']=='2':
+                    status = 'open'
+                elif (entry['operation_status_cd']=='7') or (entry['operation_status_cd']=='3'):
+                    status = 'closed'
+                else:
+                    status = 'inconclusive'
 
-        extra = extra.strip(', ')
+                internal_id = entry['recordId']
+                website = entry['website']
+                phone = entry['phonenumber']
 
-        address_list.append(address)
-        state_list.append(state)
-        status_list.append(status)
-        internal_id_list.append(internal_id)
-        website_list.append(website)
-        phone_list.append(phone)
-        extra_list.append(extra)
+                extra = ''
+
+                for extra_key in extra_keys:
+                    extra += extra_key + ' : ' + entry[extra_key] + ', '
+
+                extra = extra.strip(', ')
+
+                observation_time_list.append(observation_time)
+                address_list.append(address)
+                state_list.append(state)
+                status_list.append(status)
+                internal_id_list.append(internal_id)
+                website_list.append(website)
+                phone_list.append(phone)
+                extra_list.append(extra)
 
     n_obs = len(address_list)
-    observation_time_list = [observation_time]*n_obs
     scraper_issues_list = [scraper_issues]*n_obs
     company_list = ['dunkin donuts']*n_obs
 
@@ -548,6 +577,8 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
 
     df = pd.DataFrame(data=d)
 
+    df = df[~df[['address','internal_id']].duplicated(keep='first')].reset_index(drop=True)
+
     fname = fileparts[0] + '_dunkin_donuts.csv'
     outname = os.path.join(os.getcwd(),f'data/clean/dunkin_donuts/{fname}')
     df.to_csv(outname,index=False)
@@ -557,7 +588,7 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
 
 # *** Wendys ***
 
-def scrape_wendys_data(grid,proxypool,sleep_seconds=2.0,random_pause=2.0,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=10):
+def scrape_wendys_data(grid,proxypool,sleep_seconds=0.2,random_pause=0.1,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
 
     """
     Scraper to pull data on wendys restaurants and locations
@@ -1036,8 +1067,7 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
                 if entry['openstatus']=='OPEN':
                     status = 'open'
                 else:
-                    #status = 'inconclusive'
-                    status = entry['openstatus']
+                    status = 'inconclusive'
 
                 internal_id = entry['identifierValue']
 

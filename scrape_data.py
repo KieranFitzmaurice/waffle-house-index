@@ -16,15 +16,18 @@ proxypool = ws.ProxyPool(proxy_list_path)
 raw_filepath,scraper_issues = ws.scrape_bojangles_data(proxypool)
 df1 = ws.clean_bojangles_data(raw_filepath,scraper_issues)
 
-# Scrape and clean data on dunkin locations
-raw_filepath,scraper_issues = ws.scrape_dunkin_data(proxypool)
-df2 = ws.clean_dunkin_data(raw_filepath,scraper_issues)
 
-# Read in low-resolution grid for wendy's data
+# Read in low-resolution grid for dunkin data
 grid_filepath = os.path.join(pwd,'grids/usa_grid_v1.csv')
 grid = pd.read_csv(grid_filepath,index_col=0)
+grid = grid.iloc[15:25]
 
-# Scrape and clean data on wendy's locations
+# Scrape and clean data on dunkin locations
+raw_filepath,scraper_issues = ws.scrape_dunkin_data(grid,proxypool)
+df2 = ws.clean_dunkin_data(raw_filepath,scraper_issues)
+
+# Scrape and clean data on wendy's locations.
+# Use same coarse grid as dunkin.
 raw_filepath,scraper_issues = ws.scrape_wendys_data(grid,proxypool)
 df3 = ws.clean_wendys_data(raw_filepath,scraper_issues)
 
