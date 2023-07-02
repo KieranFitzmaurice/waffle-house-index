@@ -1117,3 +1117,184 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
     df.to_csv(outname,index=False)
 
     return(df)
+
+# *** Waffle House *** #
+
+def configure_wafflehouse_requests(grid,proxypool):
+
+    """
+    Function to configure mcdonalds request parameters
+
+    param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: proxypool: pool of proxies to route requests through
+    """
+
+    n = len(grid)
+
+    request_list = []
+
+    for point in grid.to_dict(orient='records'):
+
+        request_dict = {}
+
+        payload = {'addressId':'',
+                   'address':point['zip'],
+                   'building':'',
+                   'city':'',
+                   'zipCode':'',
+                   'handoffMode':'CounterPickup',
+                   'timeWantedType':'Immediate'}
+
+        headers={'Accept':'application/json, */*',
+                 'Accept-Encoding':'gzip, deflate, br',
+                 'Accept-Language':'en-US,en;q=0.9',
+                 'Content-Length':'130',
+                 'Content-Type':'application/json; charset=UTF-8',
+                 'Origin':'https://order.wafflehouse.com',
+                 'Referer':'https://order.wafflehouse.com/',
+                 'Sec-Ch-Ua':"\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"",
+                 'Sec-Ch-Ua-Mobile':'?0',
+                 'Sec-Ch-Ua-Platform':"Windows",
+                 'Sec-Fetch-Dest':'empty',
+                 'Sec-Fetch-Mode':'cors',
+                 'Sec-Fetch-Site':'same-origin',
+                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                 'X-Olo-App-Platform':'web',
+                 'X-Olo-Country':'us',
+                 'X-Olo-Request':'1',
+                 'X-Olo-Viewport':'Mobile',
+                 'X-Requested-With':'XMLHttpRequest'}
+
+        # When using the asynchronous scraper we need to have 'http' insteald of 'https'
+        request_dict['url'] = 'http://order.wafflehouse.com/api/vendors/search'
+        request_dict['payload'] = json.dumps(payload)
+        request_dict['headers'] = headers
+        request_dict['proxies'] = proxypool.random_proxy()
+
+        request_list.append(request_dict.copy())
+
+    return(request_list)
+
+def update_wafflehouse_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,failure_limit=5,backoff_seconds=3):
+
+    """
+    Scraper to check whether a given grid point contains a Waffle house restaurant.
+    By running this function once per month, we can speed up our daily web scraping by
+    only focusing on points with results.
+
+    param: grid: dataframe of zip codes to use in search
+    param: proxypool: pool of proxies to route requests through
+    param: sleep_seconds: number of seconds to wait in between api queries
+    param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
+    param: failure_limit: number of times to re-attempt an api query if initial attempt fails
+    param: backoff_seconds: number of seconds to wait before re-attempting api query
+    """
+
+    dist = stats.uniform(0,random_pause)
+
+    n = len(grid)
+    count_idx = list(grid.columns).index('num_results')
+    id_idx = list(grid.columns).index('restaurant_ids')
+    checked_idx = list(grid.columns).index('checked_this_month')
+
+    for i,point in enumerate(grid.to_dict(orient='records')):
+
+        print(f'{i} / {n} ({np.round(i/n*100,1)}%)',flush=True)
+
+        payload = {'addressId':'',
+                   'address':point['zip'],
+                   'building':'',
+                   'city':'',
+                   'zipCode':'',
+                   'handoffMode':'CounterPickup',
+                   'timeWantedType':'Immediate'}
+
+        headers={'Accept':'application/json, */*',
+                 'Accept-Encoding':'gzip, deflate, br',
+                 'Accept-Language':'en-US,en;q=0.9',
+                 'Content-Length':'130',
+                 'Content-Type':'application/json; charset=UTF-8',
+                 'Origin':'https://order.wafflehouse.com',
+                 'Referer':'https://order.wafflehouse.com/',
+                 'Sec-Ch-Ua':"\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"",
+                 'Sec-Ch-Ua-Mobile':'?0',
+                 'Sec-Ch-Ua-Platform':"Windows",
+                 'Sec-Fetch-Dest':'empty',
+                 'Sec-Fetch-Mode':'cors',
+                 'Sec-Fetch-Site':'same-origin',
+                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                 'X-Olo-App-Platform':'web',
+                 'X-Olo-Country':'us',
+                 'X-Olo-Request':'1',
+                 'X-Olo-Viewport':'Mobile',
+                 'X-Requested-With':'XMLHttpRequest'}
+
+        url = 'https://order.wafflehouse.com/api/vendors/search'
+
+        num_failures = 0
+
+        while num_failures < failure_limit:
+
+            res = requests.post(url,data=json.dumps(payload),headers=headers,proxies=proxypool.random_proxy())
+            time.sleep(sleep_seconds + dist.rvs())
+
+            if res.ok:
+                try:
+                    restaurants = res.json()['vendor-search-results']
+                    restaurant_ids = [x['slug'].split('-')[-1] for x in restaurants]
+                    restaurant_ids.sort()
+                    grid.iloc[i,count_idx] = len(restaurant_ids)
+                    grid.iloc[i,id_idx] = ','.join(restaurant_ids)
+                    grid.iloc[i,checked_idx] = True
+                except:
+                    grid.iloc[i,count_idx] = -1
+                    grid.iloc[i,checked_idx] = True
+                break
+
+            else:
+                num_failures +=1
+                time.sleep(backoff_seconds)
+
+        if not res.ok:
+            grid.iloc[i,count_idx] = -1
+            grid.iloc[i,checked_idx] = True
+
+    return(grid)
+
+def async_update_wafflehouse_grid(grid,proxypool,max_tokens=15,rate=10):
+    """
+    Asynchronous version of update_wafflehouse_grid function.
+
+    param: grid: dataframe of zip codes to use in search
+    param: proxypool: pool of proxies to route requests through
+    param: max_tokens: maximum number of tokens in bucket
+    param: rate: average rate of token generation [tokens/second]
+    """
+
+    count_idx = list(grid.columns).index('num_results')
+    id_idx = list(grid.columns).index('restaurant_ids')
+    checked_idx = list(grid.columns).index('checked_this_month')
+
+    request_list = configure_wafflehouse_requests(grid,proxypool)
+    scraper = AsynchronousScraper(request_list,max_tokens,rate)
+    result_list = asyncio.run(scraper.scrape())
+
+    for i in range(len(grid)):
+
+        if isinstance(result_list[i],dict):
+            try:
+                restaurants = result_list[i]['vendor-search-results']
+                restaurant_ids = [x['slug'].split('-')[-1] for x in restaurants]
+                restaurant_ids.sort()
+                grid.iloc[i,count_idx] = len(restaurant_ids)
+                grid.iloc[i,id_idx] = ','.join(restaurant_ids)
+                grid.iloc[i,checked_idx] = True
+            except:
+                grid.iloc[i,count_idx] = -1
+                grid.iloc[i,checked_idx] = True
+        else:
+            print('yo')
+            grid.iloc[i,count_idx] = -1
+            grid.iloc[i,checked_idx] = True
+
+    return(grid)
