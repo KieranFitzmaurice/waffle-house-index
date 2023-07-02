@@ -20,7 +20,6 @@ df1 = ws.clean_bojangles_data(raw_filepath,scraper_issues)
 # Read in low-resolution grid for dunkin data
 grid_filepath = os.path.join(pwd,'grids/usa_grid_v1.csv')
 grid = pd.read_csv(grid_filepath,index_col=0)
-grid = grid.iloc[15:25]
 
 # Scrape and clean data on dunkin locations
 raw_filepath,scraper_issues = ws.scrape_dunkin_data(grid,proxypool)
