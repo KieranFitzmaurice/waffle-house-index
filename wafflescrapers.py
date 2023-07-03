@@ -1145,8 +1145,9 @@ def configure_wafflehouse_requests(grid,proxypool):
                    'handoffMode':'CounterPickup',
                    'timeWantedType':'Immediate'}
 
+        # Needed to remove 'Accept-Encoding' header since otherwise we get
+        # compressed results that can't easily be extracted to json
         headers={'Accept':'application/json, */*',
-                 'Accept-Encoding':'gzip, deflate, br',
                  'Accept-Language':'en-US,en;q=0.9',
                  'Content-Length':'130',
                  'Content-Type':'application/json; charset=UTF-8',
@@ -1175,7 +1176,7 @@ def configure_wafflehouse_requests(grid,proxypool):
 
     return(request_list)
 
-def update_wafflehouse_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,failure_limit=5,backoff_seconds=3):
+def update_wafflehouse_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,failure_limit=5,backoff_seconds=1):
 
     """
     Scraper to check whether a given grid point contains a Waffle house restaurant.
@@ -1209,8 +1210,9 @@ def update_wafflehouse_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,fa
                    'handoffMode':'CounterPickup',
                    'timeWantedType':'Immediate'}
 
+        # Needed to remove 'Accept-Encoding' header since otherwise we get
+        # compressed results that can't easily be extracted to json
         headers={'Accept':'application/json, */*',
-                 'Accept-Encoding':'gzip, deflate, br',
                  'Accept-Language':'en-US,en;q=0.9',
                  'Content-Length':'130',
                  'Content-Type':'application/json; charset=UTF-8',
