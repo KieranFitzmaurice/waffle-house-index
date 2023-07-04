@@ -127,7 +127,7 @@ async def json_post_request(client,req):
     """
     Helper function for implementing asynchronous POST requests returning a json
     """
-    async with await client.post(url=req['url'],params=req['params'],headers=req['headers'],proxy=req['proxies']['http']) as res:
+    async with await client.post(url=req['url'],data=req['payload'],headers=req['headers'],proxy=req['proxies']['http']) as res:
         return await res.json()
 
 class AsynchronousScraper:
@@ -797,7 +797,6 @@ def update_mcdonalds_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxr
                   'language': 'en-us'}
 
         headers={'Accept':'*/*',
-                 'Accept-Encoding':'gzip, deflate, br',
                  'Accept-Language':'en-US,en;q=0.9',
                  'Referer':'https://www.mcdonalds.com/us/en-us/restaurant-locator.html',
                  'Sec-Ch-Ua':'"Not.A/Brand";v="8", "Chromium";v="114", "Google Chrome";v="114"',
@@ -873,7 +872,6 @@ def scrape_mcdonalds_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxr
                   'language': 'en-us'}
 
         headers={'Accept':'*/*',
-                 'Accept-Encoding':'gzip, deflate, br',
                  'Accept-Language':'en-US,en;q=0.9',
                  'Referer':'https://www.mcdonalds.com/us/en-us/restaurant-locator.html',
                  'Sec-Ch-Ua':'"Not.A/Brand";v="8", "Chromium";v="114", "Google Chrome";v="114"',
@@ -948,7 +946,6 @@ def configure_mcdonalds_requests(grid,proxypool,maxresults=174,radius_multiplier
                   'language': 'en-us'}
 
         headers={'Accept':'*/*',
-                 'Accept-Encoding':'gzip, deflate, br',
                  'Accept-Language':'en-US,en;q=0.9',
                  'Referer':'https://www.mcdonalds.com/us/en-us/restaurant-locator.html',
                  'Sec-Ch-Ua':'"Not.A/Brand";v="8", "Chromium";v="114", "Google Chrome";v="114"',
@@ -982,7 +979,7 @@ def async_scrape_mcdonalds_data(grid,proxypool,maxresults=174,radius_multiplier=
     """
 
     request_list = configure_mcdonalds_requests(grid,proxypool,maxresults,radius_multiplier)
-    scraper = AsynchronousScraper(request_list,max_tokens,rate)
+    scraper = AsynchronousScraper(request_list,method='GET',max_tokens=max_tokens,rate=rate)
     result_list = asyncio.run(scraper.scrape())
 
     scraper_issues = False
@@ -1278,7 +1275,7 @@ def async_update_wafflehouse_grid(grid,proxypool,max_tokens=15,rate=10):
     checked_idx = list(grid.columns).index('checked_this_month')
 
     request_list = configure_wafflehouse_requests(grid,proxypool)
-    scraper = AsynchronousScraper(request_list,max_tokens,rate)
+    scraper = AsynchronousScraper(request_list,method='POST',max_tokens=max_tokens,rate=rate)
     result_list = asyncio.run(scraper.scrape())
 
     for i in range(len(grid)):
