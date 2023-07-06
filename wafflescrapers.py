@@ -132,17 +132,20 @@ async def json_post_request(client,req):
 
 class AsynchronousScraper:
 
-    def __init__(self,request_list,method='GET',num_retry=1,max_tokens=10,rate=10,backoff=0.2):
+    def __init__(self,request_func,method='GET',num_retry=1,max_tokens=10,rate=10,backoff=0.2):
         """
         Class to implement asyncronous web scraping.
 
-        param: request_list: list of dictonaries containing relevant arguments for request
+        param: request_func: function to generate list of dictonaries containing relevant arguments for request
         param: method: GET or POST
         param: num_retry: number of times to reattempt a failed web scrape
         param: max_tokens: maximum number of tokens in bucket
         param: rate: average rate of token generation [tokens/second]
         param: backoff: time to wait if no tokens available before re-checking [seconds]
         """
+        self.request_func = request_func
+        request_list = request_func()
+
         self.pending_requests = np.array(request_list)
         self.pending_indices = np.arange(len(request_list))
         self.results = np.array([])
@@ -179,14 +182,22 @@ class AsynchronousScraper:
 
         while (len(self.pending_requests) > 0) and (num_passes <= self.num_retry):
 
+            # Perform web scraping pass
             new_results = await self.scraping_pass()
             new_results = np.array(new_results)
+
+            # Inspect results
             is_exception = np.array([isinstance(x,Exception) for x in new_results])
             self.results = np.append(self.results,new_results[~is_exception])
             self.completed_requests = np.append(self.completed_requests,self.pending_requests[~is_exception])
             self.completed_indices = np.append(self.completed_indices,self.pending_indices[~is_exception])
-            self.pending_requests = self.pending_requests[is_exception]
             self.pending_indices = self.pending_indices[is_exception]
+
+            # Generate new version of request list with shuffled proxies
+            request_list = np.array(self.request_func())
+
+            # Create list of requests that failed initially that we'll retry
+            self.pending_requests = request_list[self.pending_indices]
 
             num_passes += 1
 
@@ -200,11 +211,11 @@ class AsynchronousScraper:
 
 # *** Initial setup *** #
 
-def create_folders(companies=['bojangles','dunkin_donuts','wendys','mcdonalds']):
+def create_folders(companies=['bojangles','dunkin_donuts','wendys','mcdonalds','waffle_house']):
     """
     Function to create directory structure for data scraped from company websites
 
-    param: companies: company names
+    param: companies: list of company names
     """
 
     pwd = os.getcwd()
@@ -237,7 +248,7 @@ def scrape_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment
     param: failure_limit: number of additional times to query api if initial attempt fails
     """
 
-    results_dict = {}
+    result_dict = {}
 
     offset = 0
     num_extra = 0
@@ -283,7 +294,7 @@ def scrape_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment
                 num_failures = 0
 
                 keystr = f'{offset+1}-{offset + increment}'
-                results_dict[keystr] = res_dict.copy()
+                result_dict[keystr] = res_dict.copy()
 
             else:
 
@@ -306,7 +317,7 @@ def scrape_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment
     raw_filepath = os.path.join(os.getcwd(),f'data/raw/bojangles/{date_str}_bojangles.json')
 
     with open(raw_filepath,'w') as f:
-        json.dump(results_dict,f,indent=4)
+        json.dump(result_dict,f,indent=4)
         f.close()
 
     return(raw_filepath,scraper_issues)
@@ -322,7 +333,7 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
 
 
     with open(raw_filepath,'r') as f:
-        results_dict = json.load(f)
+        result_dict = json.load(f)
         f.close()
 
     fileparts = raw_filepath.split('/')[-1].split('_')
@@ -336,8 +347,8 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
     phone_list = []
     extra_list = []
 
-    for key in results_dict.keys():
-        for entry in results_dict[key]['response']['results']:
+    for key in result_dict.keys():
+        for entry in result_dict[key]['response']['results']:
 
             fields = entry['data']
 
@@ -500,7 +511,7 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
     """
 
     with open(raw_filepath,'r') as f:
-        results_dict = json.load(f)
+        result_dict = json.load(f)
         f.close()
 
     fileparts = raw_filepath.split('/')[-1].split('_')
@@ -516,7 +527,7 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
 
     extra_keys = ['operation_status_cd','close_reason_cd']
 
-    for result in results_dict:
+    for result in result_dict:
 
         observation_time = result['time']
 
@@ -672,7 +683,7 @@ def clean_wendys_data(raw_filepath,scraper_issues):
     """
 
     with open(raw_filepath,'r') as f:
-        results_dict = json.load(f)
+        result_dict = json.load(f)
         f.close()
 
     fileparts = raw_filepath.split('/')[-1].split('_')
@@ -688,7 +699,7 @@ def clean_wendys_data(raw_filepath,scraper_issues):
 
     extra_keys = ['distance','lat','lng']
 
-    for result in results_dict:
+    for result in result_dict:
 
         observation_time = result['time']
 
@@ -895,7 +906,7 @@ def scrape_mcdonalds_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,maxr
                 try:
                     result_dict['data'] = res.json()['features']
                 except:
-                    results_dict['data'] = -1
+                    result_dict['data'] = -1
                     scraper_issues = True
                 break
             else:
@@ -978,8 +989,8 @@ def async_scrape_mcdonalds_data(grid,proxypool,maxresults=174,radius_multiplier=
     param: rate: average rate of token generation [tokens/second]
     """
 
-    request_list = configure_mcdonalds_requests(grid,proxypool,maxresults,radius_multiplier)
-    scraper = AsynchronousScraper(request_list,method='GET',max_tokens=max_tokens,rate=rate)
+    request_func = lambda: configure_mcdonalds_requests(grid,proxypool,maxresults,radius_multiplier)
+    scraper = AsynchronousScraper(request_func,method='GET',max_tokens=max_tokens,rate=rate)
     result_list = asyncio.run(scraper.scrape())
 
     scraper_issues = False
@@ -1021,7 +1032,7 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
     """
 
     with open(raw_filepath,'r') as f:
-        results_dict = json.load(f)
+        result_dict = json.load(f)
         f.close()
 
     fileparts = raw_filepath.split('/')[-1].split('_')
@@ -1037,7 +1048,7 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
 
     extra_keys = ['distance','lat','lng']
 
-    for result in results_dict:
+    for result in result_dict:
 
         observation_time = result['time']
 
@@ -1116,56 +1127,123 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
     return(df)
 
 # *** Waffle House *** #
-
-def configure_wafflehouse_requests(grid,proxypool):
+def scrape_wafflehouse_data(restaurant_numbers,proxypool,sleep_seconds=0.1,random_pause=0.1,failure_limit=5,backoff_seconds=1):
 
     """
-    Function to configure mcdonalds request parameters
+    Scraper to pull data on mcdonalds restaurants and locations
 
-    param: grid: dataframe of lat/lon coordinates and radii to use in search
+    param: restaurant_numbers: numpy array of restaurant numbers to use in search
+    param: proxypool: pool of proxies to route requests through
+    param: sleep_seconds: number of seconds to wait in between api queries
+    param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
+    param: radius_multiplier: multiplier applied to search radius
+    param: failure_limit: number of times to re-attempt an api query if initial attempt fails
+    param: backoff_seconds: number of seconds to wait before re-attempting api query
+    """
+
+    dist = stats.uniform(0,random_pause)
+    scraper_issues = False
+    result_list = []
+
+    n = len(restaurant_numbers)
+
+    for i,restaurant_number in enumerate(restaurant_numbers):
+
+        result_dict = {}
+        result_dict['restaurant_number'] = int(restaurant_number)
+
+        print(f'{i} / {n} ({np.round(i/n*100,1)}%)',flush=True)
+
+        params = None
+
+        headers = {'Accept':'application/json, */*',
+                   'Accept-Language':'en-US,en;q=0.9',
+                   'Referer':f'https://order.wafflehouse.com/menu/waffle-house-{restaurant_number}',
+                   'Sec-Ch-Ua':'\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"',
+                   'Sec-Ch-Ua-Mobile':'?0',
+                   'Sec-Ch-Ua-Platform':'\"Windows\"',
+                   'Sec-Fetch-Dest':'empty',
+                   'Sec-Fetch-Mode':'cors',
+                   'Sec-Fetch-Site':'same-origin',
+                   'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                   'X-Olo-App-Platform':'web',
+                   'X-Olo-Country':'us',
+                   'X-Olo-Request':'1',
+                   'X-Olo-Viewport':'Tablet',
+                   'X-Requested-With':'XMLHttpRequest'}
+
+        url = f'https://order.wafflehouse.com/api/vendors/waffle-house-{restaurant_number}'
+
+        num_failures = 0
+
+        while num_failures < failure_limit:
+
+            res = requests.get(url,params=params,headers=headers,proxies=proxypool.random_proxy())
+            time.sleep(sleep_seconds + dist.rvs())
+
+            if res.ok:
+                try:
+                    result_dict['data'] = res.json()['vendor']
+                except:
+                    result_dict['data'] = -1
+                    scraper_issues = True
+                break
+            else:
+                num_failures +=1
+                time.sleep(backoff_seconds)
+
+        if not res.ok:
+            result_dict['data'] = res.status_code
+            scraper_issues = True
+
+        result_dict['time'] = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+
+        result_list.append(result_dict.copy())
+
+    date_str = datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
+    raw_filepath = os.path.join(os.getcwd(),f'data/raw/waffle_house/{date_str}_waffle_house.json')
+
+    with open(raw_filepath,'w') as f:
+        json.dump(result_list,f,indent=4)
+        f.close()
+
+    return(raw_filepath,scraper_issues)
+
+
+def configure_wafflehouse_requests(restaurant_numbers,proxypool):
+
+    """
+    Function to configure waffle house request parameters
+
+    param: restaurant_numbers: numpy array of restaurant numbers to use in search
     param: proxypool: pool of proxies to route requests through
     """
 
-    n = len(grid)
-
     request_list = []
 
-    for point in grid.to_dict(orient='records'):
+    for restaurant_number in restaurant_numbers:
 
         request_dict = {}
 
-        payload = {'addressId':'',
-                   'address':point['zip'],
-                   'building':'',
-                   'city':'',
-                   'zipCode':'',
-                   'handoffMode':'CounterPickup',
-                   'timeWantedType':'Immediate'}
+        headers = {'Accept':'application/json, */*',
+                   'Accept-Language':'en-US,en;q=0.9',
+                   'Referer':f'https://order.wafflehouse.com/menu/waffle-house-{restaurant_number}',
+                   'Sec-Ch-Ua':'\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"',
+                   'Sec-Ch-Ua-Mobile':'?0',
+                   'Sec-Ch-Ua-Platform':'\"Windows\"',
+                   'Sec-Fetch-Dest':'empty',
+                   'Sec-Fetch-Mode':'cors',
+                   'Sec-Fetch-Site':'same-origin',
+                   'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                   'X-Olo-App-Platform':'web',
+                   'X-Olo-Country':'us',
+                   'X-Olo-Request':'1',
+                   'X-Olo-Viewport':'Tablet',
+                   'X-Requested-With':'XMLHttpRequest'}
 
-        # Needed to remove 'Accept-Encoding' header since otherwise we get
-        # compressed results that can't easily be extracted to json
-        headers={'Accept':'application/json, */*',
-                 'Accept-Language':'en-US,en;q=0.9',
-                 'Content-Length':'130',
-                 'Content-Type':'application/json; charset=UTF-8',
-                 'Origin':'https://order.wafflehouse.com',
-                 'Referer':'https://order.wafflehouse.com/',
-                 'Sec-Ch-Ua':"\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"",
-                 'Sec-Ch-Ua-Mobile':'?0',
-                 'Sec-Ch-Ua-Platform':"Windows",
-                 'Sec-Fetch-Dest':'empty',
-                 'Sec-Fetch-Mode':'cors',
-                 'Sec-Fetch-Site':'same-origin',
-                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-                 'X-Olo-App-Platform':'web',
-                 'X-Olo-Country':'us',
-                 'X-Olo-Request':'1',
-                 'X-Olo-Viewport':'Mobile',
-                 'X-Requested-With':'XMLHttpRequest'}
-
-        # When using the asynchronous scraper we need to have 'http' insteald of 'https'
-        request_dict['url'] = 'http://order.wafflehouse.com/api/vendors/search'
-        request_dict['payload'] = json.dumps(payload)
+        # Note use of http instead of https
+        request_dict['url'] = f'http://order.wafflehouse.com/api/vendors/waffle-house-{restaurant_number}'
+        request_dict['params'] = None
         request_dict['headers'] = headers
         request_dict['proxies'] = proxypool.random_proxy()
 
@@ -1173,127 +1251,45 @@ def configure_wafflehouse_requests(grid,proxypool):
 
     return(request_list)
 
-def update_wafflehouse_grid(grid,proxypool,sleep_seconds=0.1,random_pause=0.1,failure_limit=5,backoff_seconds=1):
-
+def async_scrape_wafflehouse_data(restaurant_numbers,proxypool,max_tokens=15,rate=10):
     """
-    Scraper to check whether a given grid point contains a Waffle house restaurant.
-    By running this function once per month, we can speed up our daily web scraping by
-    only focusing on points with results.
+    Function to asynchronously scrape data from waffle house web api.
 
-    param: grid: dataframe of zip codes to use in search
-    param: proxypool: pool of proxies to route requests through
-    param: sleep_seconds: number of seconds to wait in between api queries
-    param: random_pause: total seconds between queries = sleep_seconds + uniform[0,random_pause]
-    param: failure_limit: number of times to re-attempt an api query if initial attempt fails
-    param: backoff_seconds: number of seconds to wait before re-attempting api query
-    """
-
-    dist = stats.uniform(0,random_pause)
-
-    n = len(grid)
-    count_idx = list(grid.columns).index('num_results')
-    id_idx = list(grid.columns).index('restaurant_ids')
-    checked_idx = list(grid.columns).index('checked_this_month')
-
-    for i,point in enumerate(grid.to_dict(orient='records')):
-
-        print(f'{i} / {n} ({np.round(i/n*100,1)}%)',flush=True)
-
-        payload = {'addressId':'',
-                   'address':point['zip'],
-                   'building':'',
-                   'city':'',
-                   'zipCode':'',
-                   'handoffMode':'CounterPickup',
-                   'timeWantedType':'Immediate'}
-
-        # Needed to remove 'Accept-Encoding' header since otherwise we get
-        # compressed results that can't easily be extracted to json
-        headers={'Accept':'application/json, */*',
-                 'Accept-Language':'en-US,en;q=0.9',
-                 'Content-Length':'130',
-                 'Content-Type':'application/json; charset=UTF-8',
-                 'Origin':'https://order.wafflehouse.com',
-                 'Referer':'https://order.wafflehouse.com/',
-                 'Sec-Ch-Ua':"\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"",
-                 'Sec-Ch-Ua-Mobile':'?0',
-                 'Sec-Ch-Ua-Platform':"Windows",
-                 'Sec-Fetch-Dest':'empty',
-                 'Sec-Fetch-Mode':'cors',
-                 'Sec-Fetch-Site':'same-origin',
-                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-                 'X-Olo-App-Platform':'web',
-                 'X-Olo-Country':'us',
-                 'X-Olo-Request':'1',
-                 'X-Olo-Viewport':'Mobile',
-                 'X-Requested-With':'XMLHttpRequest'}
-
-        url = 'https://order.wafflehouse.com/api/vendors/search'
-
-        num_failures = 0
-
-        while num_failures < failure_limit:
-
-            res = requests.post(url,data=json.dumps(payload),headers=headers,proxies=proxypool.random_proxy())
-            time.sleep(sleep_seconds + dist.rvs())
-
-            if res.ok:
-                try:
-                    restaurants = res.json()['vendor-search-results']
-                    restaurant_ids = [x['slug'].split('-')[-1] for x in restaurants]
-                    restaurant_ids.sort()
-                    grid.iloc[i,count_idx] = len(restaurant_ids)
-                    grid.iloc[i,id_idx] = ','.join(restaurant_ids)
-                    grid.iloc[i,checked_idx] = True
-                except:
-                    grid.iloc[i,count_idx] = -1
-                    grid.iloc[i,checked_idx] = True
-                break
-
-            else:
-                num_failures +=1
-                time.sleep(backoff_seconds)
-
-        if not res.ok:
-            grid.iloc[i,count_idx] = -1
-            grid.iloc[i,checked_idx] = True
-
-    return(grid)
-
-def async_update_wafflehouse_grid(grid,proxypool,max_tokens=15,rate=10):
-    """
-    Asynchronous version of update_wafflehouse_grid function.
-
-    param: grid: dataframe of zip codes to use in search
+    param: restaurant_numbers: numpy array of restaurant numbers to use in search
     param: proxypool: pool of proxies to route requests through
     param: max_tokens: maximum number of tokens in bucket
     param: rate: average rate of token generation [tokens/second]
     """
 
-    count_idx = list(grid.columns).index('num_results')
-    id_idx = list(grid.columns).index('restaurant_ids')
-    checked_idx = list(grid.columns).index('checked_this_month')
-
-    request_list = configure_wafflehouse_requests(grid,proxypool)
-    scraper = AsynchronousScraper(request_list,method='POST',max_tokens=max_tokens,rate=rate)
+    request_func = lambda: configure_wafflehouse_requests(restaurant_numbers,proxypool)
+    scraper = AsynchronousScraper(request_func,method='GET',num_retry=5,max_tokens=max_tokens,rate=rate)
     result_list = asyncio.run(scraper.scrape())
 
-    for i in range(len(grid)):
+    scraper_issues = False
+
+    for i,restaurant_number in enumerate(restaurant_numbers):
+
+        result_dict = {}
+        result_dict['restaurant_number'] = int(restaurant_number)
 
         if isinstance(result_list[i],dict):
             try:
-                restaurants = result_list[i]['vendor-search-results']
-                restaurant_ids = [x['slug'].split('-')[-1] for x in restaurants]
-                restaurant_ids.sort()
-                grid.iloc[i,count_idx] = len(restaurant_ids)
-                grid.iloc[i,id_idx] = ','.join(restaurant_ids)
-                grid.iloc[i,checked_idx] = True
+                result_dict['data'] = result_list[i]['vendor']
             except:
-                grid.iloc[i,count_idx] = -1
-                grid.iloc[i,checked_idx] = True
+                result_dict['data'] = -1
+                scraper_issues = True
         else:
-            print('yo')
-            grid.iloc[i,count_idx] = -1
-            grid.iloc[i,checked_idx] = True
+            result_dict['data'] = -1
+            scraper_issues = True
 
-    return(grid)
+        result_dict['time'] = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+        result_list[i] = result_dict.copy()
+
+    date_str = datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
+    raw_filepath = os.path.join(os.getcwd(),f'data/raw/waffle_house/{date_str}_waffle_house.json')
+
+    with open(raw_filepath,'w') as f:
+       json.dump(result_list,f,indent=4)
+       f.close()
+
+    return(raw_filepath,scraper_issues)
