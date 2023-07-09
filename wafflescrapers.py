@@ -225,12 +225,25 @@ def create_folders(companies=['bojangles','dunkin_donuts','wendys','mcdonalds','
     for company in companies:
         folders_to_create.append(f'data/raw/{company}')
         folders_to_create.append(f'data/clean/{company}')
+        folders_to_create.append(f'data/failed_queries/{company}')
 
     for folder in folders_to_create:
         folderpath = os.path.join(pwd,folder)
         if not os.path.exists(folderpath):
             os.makedirs(folderpath,exist_ok=True)
 
+    return(None)
+
+# Helpter function to save list as .txt file
+def save_list_as_txt(filepath,x):
+    """
+    param: filepath: output path of .txt file
+    param: x: list to be saved
+    """
+    with open(filepath,'w') as f:
+        for i in range(len(x)):
+            f.write(f'{x[i]}\n')
+        f.close()
     return(None)
 
 # *** Bojangles *** #
@@ -256,6 +269,7 @@ def scrape_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment
 
     dist = stats.uniform(0,random_pause)
 
+    failed_queries = []
     keepgoing = True
     scraper_issues = False
 
@@ -310,15 +324,21 @@ def scrape_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment
         time.sleep(sleep_seconds + dist.rvs())
 
         if (num_extra > extra_limit) or (num_failures > failure_limit):
-
             keepgoing = False
+            keystr = f'{offset+1}-{offset + increment}'
+            failed_queries.append(keystr)
+
 
     date_str = datetime.today().strftime('%Y-%m-%d_%H-%M-%S')
+    date_no_time = date_str.split('_')[0]
     raw_filepath = os.path.join(os.getcwd(),f'data/raw/bojangles/{date_str}_bojangles.json')
+    failed_filepath = os.path.join(os.getcwd(),f'data/failed_queries/bojangles/{date_no_time}_bojangles.txt')
 
     with open(raw_filepath,'w') as f:
         json.dump(result_dict,f,indent=4)
         f.close()
+
+    save_list_as_txt(failed_filepath,failed_queries)
 
     return(raw_filepath,scraper_issues)
 
@@ -331,7 +351,6 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
     param: scraper_issues: False if data was scraped without errors; True otherwise
     """
 
-
     with open(raw_filepath,'r') as f:
         result_dict = json.load(f)
         f.close()
@@ -339,6 +358,7 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
     fileparts = raw_filepath.split('/')[-1].split('_')
     observation_time = pd.Timestamp(fileparts[0] + ' ' + fileparts[1].replace('-',':'))
 
+    query_id_list = []
     internal_id_list = []
     address_list = []
     state_list = []
@@ -346,6 +366,8 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
     website_list = []
     phone_list = []
     extra_list = []
+    company_lat_list = []
+    company_lon_list = []
 
     for key in result_dict.keys():
         for entry in result_dict[key]['response']['results']:
@@ -390,6 +412,14 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
             except:
                 extra = np.nan
 
+            try:
+                company_lat = fields['cityCoordinate']['latitude']
+                company_lon = fields['cityCoordinate']['longitude']
+            except:
+                company_lat = np.nan
+                company_lon = np.nan
+
+            query_id_list.append(key)
             address_list.append(address)
             state_list.append(state)
             status_list.append(status)
@@ -397,6 +427,8 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
             website_list.append(website)
             phone_list.append(phone)
             extra_list.append(extra)
+            company_lat_list.append(company_lat)
+            company_lon_list.append(company_lon)
 
     n_obs = len(address_list)
     observation_time_list = [observation_time]*n_obs
@@ -405,6 +437,7 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
 
     d = {'observation_time':observation_time_list,
          'scraper_issues': scraper_issues_list,
+         'query_id':query_id_list,
          'company':company_list,
          'address':address_list,
          'state':state_list,
@@ -412,9 +445,12 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
          'internal_id':internal_id_list,
          'website':website_list,
          'phone':phone_list,
-         'extra':extra_list}
+         'extra':extra_list,
+         'company_lat':company_lat_list,
+         'company_lon':company_lon_list}
 
     df = pd.DataFrame(data=d)
+    df = df[~df[['address','internal_id']].duplicated(keep='first')].reset_index(drop=True)
 
     fname = fileparts[0] + '_bojangles.csv'
     outname = os.path.join(os.getcwd(),f'data/clean/bojangles/{fname}')
@@ -516,7 +552,10 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
 
     fileparts = raw_filepath.split('/')[-1].split('_')
 
+    failed_queries = []
+
     observation_time_list = []
+    query_id_list = []
     address_list = []
     state_list = []
     status_list = []
@@ -524,12 +563,15 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
     website_list = []
     phone_list = []
     extra_list = []
+    company_lat_list = []
+    company_lon_list = []
 
     extra_keys = ['operation_status_cd','close_reason_cd']
 
     for result in result_dict:
 
         observation_time = result['time']
+        query_id = result['point']['index']
 
         if type(result['data'])==list:
 
@@ -558,11 +600,15 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
                 extra = ''
 
                 for extra_key in extra_keys:
-                    extra += extra_key + ' : ' + entry[extra_key] + ', '
+                    extra += extra_key + ' : ' + str(entry[extra_key]) + ', '
 
                 extra = extra.strip(', ')
 
+                company_lat = entry['lat']
+                company_lon = entry['lng']
+
                 observation_time_list.append(observation_time)
+                query_id_list.append(query_id)
                 address_list.append(address)
                 state_list.append(state)
                 status_list.append(status)
@@ -570,6 +616,11 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
                 website_list.append(website)
                 phone_list.append(phone)
                 extra_list.append(extra)
+                company_lat_list.append(company_lat)
+                company_lon_list.append(company_lon)
+
+        else:
+            failed_queries.append(query_id)
 
     n_obs = len(address_list)
     scraper_issues_list = [scraper_issues]*n_obs
@@ -577,6 +628,7 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
 
     d = {'observation_time':observation_time_list,
          'scraper_issues': scraper_issues_list,
+         'query_id': query_id_list,
          'company':company_list,
          'address':address_list,
          'state':state_list,
@@ -584,7 +636,9 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
          'internal_id':internal_id_list,
          'website':website_list,
          'phone':phone_list,
-         'extra':extra_list}
+         'extra':extra_list,
+         'company_lat':company_lat_list,
+         'company_lon':company_lon_list}
 
     df = pd.DataFrame(data=d)
 
@@ -593,6 +647,9 @@ def clean_dunkin_data(raw_filepath,scraper_issues):
     fname = fileparts[0] + '_dunkin_donuts.csv'
     outname = os.path.join(os.getcwd(),f'data/clean/dunkin_donuts/{fname}')
     df.to_csv(outname,index=False)
+
+    failed_filepath = os.path.join(os.getcwd(),f'data/failed_queries/dunkin_donuts/{fileparts[0]}_dunkin_donuts.txt')
+    save_list_as_txt(failed_filepath,failed_queries)
 
     return(df)
 
@@ -688,7 +745,10 @@ def clean_wendys_data(raw_filepath,scraper_issues):
 
     fileparts = raw_filepath.split('/')[-1].split('_')
 
+    failed_queries = []
+
     observation_time_list = []
+    query_id_list = []
     address_list = []
     state_list = []
     status_list = []
@@ -696,12 +756,15 @@ def clean_wendys_data(raw_filepath,scraper_issues):
     website_list = []
     phone_list = []
     extra_list = []
+    company_lat_list = []
+    company_lon_list = []
 
-    extra_keys = ['distance','lat','lng']
+    extra_keys = ['distance']
 
     for result in result_dict:
 
         observation_time = result['time']
+        query_id = result['point']['index']
 
         if type(result['data'])==list:
 
@@ -730,11 +793,15 @@ def clean_wendys_data(raw_filepath,scraper_issues):
                     extra = ''
 
                     for extra_key in extra_keys:
-                        extra += extra_key + ' : ' + entry[extra_key] + ', '
+                        extra += extra_key + ' : ' + str(entry[extra_key]) + ', '
 
                     extra = extra.strip(', ')
 
+                    company_lat = entry['lat']
+                    company_lon = entry['lng']
+
                     observation_time_list.append(observation_time)
+                    query_id_list.append(query_id)
                     address_list.append(address)
                     state_list.append(state)
                     status_list.append(status)
@@ -742,9 +809,11 @@ def clean_wendys_data(raw_filepath,scraper_issues):
                     website_list.append(website)
                     phone_list.append(phone)
                     extra_list.append(extra)
+                    company_lat_list.append(company_lat)
+                    company_lon_list.append(company_lon)
 
         else:
-            print(result['data'])
+            failed_queries.append(query_id)
 
     n_obs = len(address_list)
     scraper_issues_list = [scraper_issues]*n_obs
@@ -752,6 +821,7 @@ def clean_wendys_data(raw_filepath,scraper_issues):
 
     d = {'observation_time':observation_time_list,
          'scraper_issues': scraper_issues_list,
+         'query_id':query_id_list,
          'company':company_list,
          'address':address_list,
          'state':state_list,
@@ -759,7 +829,9 @@ def clean_wendys_data(raw_filepath,scraper_issues):
          'internal_id':internal_id_list,
          'website':website_list,
          'phone':phone_list,
-         'extra':extra_list}
+         'extra':extra_list,
+         'company_lat':company_lat_list,
+         'company_lon':company_lon_list}
 
     df = pd.DataFrame(data=d)
 
@@ -768,6 +840,9 @@ def clean_wendys_data(raw_filepath,scraper_issues):
     fname = fileparts[0] + '_wendys.csv'
     outname = os.path.join(os.getcwd(),f'data/clean/wendys/{fname}')
     df.to_csv(outname,index=False)
+
+    failed_filepath = os.path.join(os.getcwd(),f'data/failed_queries/wendys/{fileparts[0]}_wendys.txt')
+    save_list_as_txt(failed_filepath,failed_queries)
 
     return(df)
 
@@ -990,7 +1065,7 @@ def async_scrape_mcdonalds_data(grid,proxypool,maxresults=174,radius_multiplier=
     """
 
     request_func = lambda: configure_mcdonalds_requests(grid,proxypool,maxresults,radius_multiplier)
-    scraper = AsynchronousScraper(request_func,method='GET',max_tokens=max_tokens,rate=rate)
+    scraper = AsynchronousScraper(request_func,method='GET',num_retry=5,max_tokens=max_tokens,rate=rate)
     result_list = asyncio.run(scraper.scrape())
 
     scraper_issues = False
@@ -1037,7 +1112,10 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
 
     fileparts = raw_filepath.split('/')[-1].split('_')
 
+    failed_queries = []
+
     observation_time_list = []
+    query_id_list = []
     address_list = []
     state_list = []
     status_list = []
@@ -1045,18 +1123,22 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
     website_list = []
     phone_list = []
     extra_list = []
-
-    extra_keys = ['distance','lat','lng']
+    company_lat_list = []
+    company_lon_list = []
 
     for result in result_dict:
 
         observation_time = result['time']
+        query_id = result['point']['index']
 
         if type(result['data'])==list:
 
             for entry in result['data']:
 
-                extra = str(entry['geometry']).strip('{}')
+                extra = ''
+                company_lat = entry['geometry']['coordinates'][1]
+                company_lon = entry['geometry']['coordinates'][0]
+
                 entry = entry['properties']
 
                 address = entry['addressLine1']
@@ -1090,6 +1172,7 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
                     phone = ''
 
                 observation_time_list.append(observation_time)
+                query_id_list.append(query_id)
                 address_list.append(address)
                 state_list.append(state)
                 status_list.append(status)
@@ -1097,15 +1180,18 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
                 website_list.append(website)
                 phone_list.append(phone)
                 extra_list.append(extra)
+                company_lat_list.append(company_lat)
+                company_lon_list.append(company_lon)
 
         else:
-            print(result['data'])
+            failed_queries.append(query_id)
 
     n_obs = len(address_list)
     scraper_issues_list = [scraper_issues]*n_obs
     company_list = ['mcdonalds']*n_obs
 
     d = {'observation_time':observation_time_list,
+         'query_id':query_id_list,
          'scraper_issues': scraper_issues_list,
          'company':company_list,
          'address':address_list,
@@ -1114,7 +1200,9 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
          'internal_id':internal_id_list,
          'website':website_list,
          'phone':phone_list,
-         'extra':extra_list}
+         'extra':extra_list,
+         'company_lat':company_lat_list,
+         'company_lon':company_lon_list}
 
     df = pd.DataFrame(data=d)
 
@@ -1123,6 +1211,9 @@ def clean_mcdonalds_data(raw_filepath,scraper_issues):
     fname = fileparts[0] + '_mcdonalds.csv'
     outname = os.path.join(os.getcwd(),f'data/clean/mcdonalds/{fname}')
     df.to_csv(outname,index=False)
+
+    failed_filepath = os.path.join(os.getcwd(),f'data/failed_queries/mcdonalds/{fileparts[0]}_mcdonalds.txt')
+    save_list_as_txt(failed_filepath,failed_queries)
 
     return(df)
 
@@ -1293,3 +1384,121 @@ def async_scrape_wafflehouse_data(restaurant_numbers,proxypool,max_tokens=15,rat
        f.close()
 
     return(raw_filepath,scraper_issues)
+
+def clean_wafflehouse_data(raw_filepath,scraper_issues):
+
+    """
+    Function to clean scraped data on wafflehouse locations.
+
+    param: raw_filepath: filepath of raw data in .json format
+    param: scraper_issues: False if data was scraped without errors; True otherwise
+    """
+
+    with open(raw_filepath,'r') as f:
+        result_dict = json.load(f)
+        f.close()
+
+    fileparts = raw_filepath.split('/')[-1].split('_')
+
+    failed_queries = []
+
+    observation_time_list = []
+    query_id_list = []
+    address_list = []
+    state_list = []
+    status_list = []
+    internal_id_list = []
+    website_list = []
+    phone_list = []
+    extra_list = []
+    company_lat_list = []
+    company_lon_list = []
+
+    extra_keys = ['slug','crossStreet','disclaimers','id']
+
+    for result in result_dict:
+
+        observation_time = result['time']
+        query_id = result['restaurant_number']
+
+        if type(result['data'])==dict:
+
+            entry = result['data']
+
+            address = entry['address']['streetAddress']
+
+            if 'streetAddress2' in entry['address'].keys():
+                if len(entry['address']['streetAddress2']) > 0:
+                    address += ', ' + entry['address']['streetAddress2']
+
+            address += ', '  + entry['address']['city']
+            address += ', '  + entry['address']['state']
+            address += ' '  + entry['address']['postalCode']
+
+            state = entry['address']['state']
+
+            if entry['isOpen']==True:
+                status = 'open'
+            elif entry['isOpen']==False:
+                status = 'closed'
+            else:
+                status = 'inconclusive'
+
+            internal_id = entry['externalReference']
+
+            website = f'https://order.wafflehouse.com/menu/waffle-house-{query_id}'
+            phone = entry['phoneNumber']
+
+            extra = ''
+
+            for extra_key in extra_keys:
+                extra += extra_key + ' : ' + str(entry[extra_key]) + ', '
+
+            company_lat = entry['latitude']
+            company_lon = entry['longitude']
+
+            observation_time_list.append(observation_time)
+            query_id_list.append(query_id)
+            address_list.append(address)
+            state_list.append(state)
+            status_list.append(status)
+            internal_id_list.append(internal_id)
+            website_list.append(website)
+            phone_list.append(phone)
+            extra_list.append(extra)
+            company_lat_list.append(company_lat)
+            company_lon_list.append(company_lon)
+
+        else:
+            failed_queries.append(query_id)
+
+    n_obs = len(address_list)
+    scraper_issues_list = [scraper_issues]*n_obs
+    company_list = ['waffle_house']*n_obs
+
+    d = {'observation_time':observation_time_list,
+         'query_id':query_id_list,
+         'scraper_issues': scraper_issues_list,
+         'company':company_list,
+         'address':address_list,
+         'state':state_list,
+         'status':status_list,
+         'internal_id':internal_id_list,
+         'website':website_list,
+         'phone':phone_list,
+         'extra':extra_list,
+         'company_lat':company_lat_list,
+         'company_lon':company_lon_list}
+
+    df = pd.DataFrame(data=d)
+
+    df = df[~df[['address','internal_id']].duplicated(keep='first')].reset_index(drop=True)
+
+    fname = fileparts[0] + '_mcdonalds.csv'
+    outname = os.path.join(os.getcwd(),f'data/clean/waffle_house/{fname}')
+    df.to_csv(outname,index=False)
+
+    failed_filepath = os.path.join(os.getcwd(),f'data/failed_queries/waffle_house/{fileparts[0]}_waffle_house.txt')
+    save_list_as_txt(failed_filepath,failed_queries)
+
+    return(df)
