@@ -1494,7 +1494,7 @@ def clean_wafflehouse_data(raw_filepath,scraper_issues):
 
     df = df[~df[['address','internal_id']].duplicated(keep='first')].reset_index(drop=True)
 
-    fname = fileparts[0] + '_mcdonalds.csv'
+    fname = fileparts[0] + '_waffle_house.csv'
     outname = os.path.join(os.getcwd(),f'data/clean/waffle_house/{fname}')
     df.to_csv(outname,index=False)
 
