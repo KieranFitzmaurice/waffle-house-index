@@ -25,7 +25,7 @@ class ProxyPool:
         self.num_proxies = len(self.proxy_list)
         self.random_index = stats.randint(0,self.num_proxies).rvs
 
-    def verify_ip_addresses(self,sleep_seconds=0.0,nmax=10):
+    def verify_ip_addresses(self,sleep_seconds=0.1,nmax=10):
 
         """
         Function to verify that IP address appears as those of proxies
@@ -40,6 +40,35 @@ class ProxyPool:
             time.sleep(sleep_seconds)
 
         return(None)
+
+    def remove_bad_proxies(self,sleep_seconds=0.1):
+        """
+        Function to remove non-working proxies from list
+        """
+
+        url = 'https://api.ipify.org/'
+        working_proxies = []
+
+        n_start = self.num_proxies
+
+        for proxy in self.proxy_list:
+            try:
+                res = requests.get(url,proxies=proxy)
+                working_proxies.append(proxy)
+            except:
+                pass
+            time.sleep(sleep_seconds)
+
+        self.proxy_list = working_proxies
+        self.num_proxies = len(self.proxy_list)
+        self.random_index = stats.randint(0,self.num_proxies).rvs
+
+        n_remove  = n_start - self.num_proxies
+
+        print(f'Removed {n_remove} / {n_start} proxies.',flush=True)
+
+        return(None)
+
 
     def random_proxy(self):
         """
@@ -1414,7 +1443,7 @@ def clean_wafflehouse_data(raw_filepath,scraper_issues):
     company_lat_list = []
     company_lon_list = []
 
-    extra_keys = ['slug','crossStreet','disclaimers','id']
+    extra_keys = ['slug','crossStreet','status','disclaimers','id']
 
     for result in result_dict:
 

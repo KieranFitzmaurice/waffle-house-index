@@ -11,6 +11,7 @@ ws.create_folders()
 # Initialize proxy pool
 proxy_list_path = os.path.join(pwd,'proxies','proxy_list.txt')
 proxypool = ws.ProxyPool(proxy_list_path)
+proxypool.remove_bad_proxies()
 
 # Scrape and clean data on bojangles locations
 raw_filepath,scraper_issues = ws.scrape_bojangles_data(proxypool)
