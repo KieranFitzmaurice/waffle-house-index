@@ -8,6 +8,7 @@ pwd = os.getcwd()
 # Initialize proxy pool
 proxy_list_path = os.path.join(pwd,'proxies','proxy_list.txt')
 proxypool = ws.ProxyPool(proxy_list_path)
+proxypool.remove_bad_proxies()
 
 # Check whether it's the first day of the month
 first_of_month = (pd.to_datetime('today').date().day == 1)
