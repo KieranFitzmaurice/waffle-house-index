@@ -324,31 +324,38 @@ def scrape_bojangles_data(proxypool,sleep_seconds=0.2,random_pause=0.1,increment
                   'source': 'STANDARD',
                   'jsLibVersion': 'v1.12.4'}
 
-        res = requests.get(url,params=params,proxies=proxypool.random_proxy())
+        try:
+            res = requests.get(url,params=params,proxies=proxypool.random_proxy())
 
-        if res.ok:
+            if res.ok:
 
-            res_dict = res.json()
+                res_dict = res.json()
 
-            num_results = len(res_dict['response']['results'])
+                num_results = len(res_dict['response']['results'])
 
-            if num_results > 0:
+                if num_results > 0:
 
-                num_failures = 0
+                    num_failures = 0
 
-                keystr = f'{offset+1}-{offset + increment}'
-                result_dict[keystr] = res_dict.copy()
+                    keystr = f'{offset+1}-{offset + increment}'
+                    result_dict[keystr] = res_dict.copy()
+
+                else:
+
+                    num_extra += 1
+
+                offset += increment
 
             else:
 
-                num_extra += 1
+                num_failures += 1
+                scraper_issues = True
 
-            offset += increment
-
-        else:
+        except:
 
             num_failures += 1
             scraper_issues = True
+
 
         time.sleep(sleep_seconds + dist.rvs())
 
@@ -489,7 +496,7 @@ def clean_bojangles_data(raw_filepath,scraper_issues):
 
 # *** Dunkin Donuts ***
 
-def scrape_dunkin_data(grid,proxypool,sleep_seconds=0.2,random_pause=0.1,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
+def scrape_dunkin_data(grid,proxypool,sleep_seconds=0.1,random_pause=0.3,maxresults=10000,radius_multiplier=1.0,failure_limit=5,backoff_seconds=3):
 
     """
     Scraper to pull data on dunkin donuts locations
@@ -535,22 +542,31 @@ def scrape_dunkin_data(grid,proxypool,sleep_seconds=0.2,random_pause=0.1,maxresu
 
         while num_failures < failure_limit:
 
-            res = requests.post(url,data=payload,proxies=proxypool.random_proxy())
-            time.sleep(sleep_seconds + dist.rvs())
+            try:
+                res = requests.post(url,data=payload,proxies=proxypool.random_proxy())
+                time.sleep(sleep_seconds + dist.rvs())
 
-            if res.ok:
-                try:
-                    result_dict['data'] = res.json()['data']['storeAttributes']
-                except:
-                    result_dict['data'] = -1
-                    scraper_issues = True
-                break
-            else:
-                num_failures +=1
+                if res.ok:
+                    try:
+                        result_dict['data'] = res.json()['data']['storeAttributes']
+                    except:
+                        result_dict['data'] = -1
+                        scraper_issues = True
+                    break
+                else:
+                    num_failures +=1
+                    time.sleep(backoff_seconds)
+
+            except:
+                num_failures += 1
                 time.sleep(backoff_seconds)
 
-        if not res.ok:
-            result_dict['data'] = res.status_code
+        try:
+            if not res.ok:
+                result_dict['data'] = res.status_code
+                scraper_issues = True
+        except (AttributeError,NameError): # In case res isn't defined
+            result_dict['data'] = -1
             scraper_issues = True
 
         result_dict['time'] = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
@@ -732,18 +748,26 @@ def scrape_wendys_data(grid,proxypool,sleep_seconds=0.2,random_pause=0.1,maxresu
 
         while num_failures < failure_limit:
 
-            res = requests.get(url,params=params,headers=headers,proxies=proxypool.random_proxy())
-            time.sleep(sleep_seconds + dist.rvs())
+            try:
+                res = requests.get(url,params=params,headers=headers,proxies=proxypool.random_proxy())
+                time.sleep(sleep_seconds + dist.rvs())
 
-            if res.ok:
-                result_dict['data'] = res.json()['data']
-                break
-            else:
+                if res.ok:
+                    result_dict['data'] = res.json()['data']
+                    break
+                else:
+                    num_failures +=1
+                    time.sleep(backoff_seconds)
+            except:
                 num_failures +=1
                 time.sleep(backoff_seconds)
 
-        if not res.ok:
-            result_dict['data'] = res.status_code
+        try:
+            if not res.ok:
+                result_dict['data'] = res.status_code
+                scraper_issues = True
+        except (AttributeError,NameError):
+            result_dict['data'] = -1
             scraper_issues = True
 
         result_dict['time'] = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
